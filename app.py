@@ -1,3 +1,4 @@
+import os
 import sqlite3
 import datetime
 import socket
@@ -154,25 +155,9 @@ div.stButton > button:first-child {
 # ==========================================
 # 1. 資料庫連線與 API 同步邏輯
 # ==========================================
-DB_FILE = "weather_data.db"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_FILE = os.path.join(BASE_DIR, "weather_data.db")
 CWA_API_KEY = "CWA-B7027CBB-4D9D-415E-A5A3-737F76555BAA"
-
-@st.cache_data(ttl=300)
-def load_data():
-    """從 SQLite 讀取氣象預報資料庫"""
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        df = pd.read_sql("SELECT * FROM TemperatureForecasts", conn)
-        conn.close()
-        
-        # 轉換數值格式
-        for col in ["minTemp", "maxTemp", "pop"]:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce")
-        return df
-    except Exception as e:
-        st.error(f"資料庫讀取失敗：{e}")
-        return pd.DataFrame()
 
 def sync_cwa_api():
     """即時連線中央氣象署 API 更新本地 SQLite 資料庫"""
@@ -228,6 +213,48 @@ def sync_cwa_api():
     except Exception as e:
         return False, f"同步失敗：{str(e)}"
 
+@st.cache_data(ttl=300)
+def load_data():
+    """從 SQLite 讀取氣象預報資料庫，若無資料則自動從氣象署 API 同步"""
+    try:
+        # 若資料庫不存在或為空，自動先從氣象署 API 抓取
+        if not os.path.exists(DB_FILE):
+            sync_cwa_api()
+
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='TemperatureForecasts'")
+        if cursor.fetchone()[0] == 0:
+            conn.close()
+            sync_cwa_api()
+            conn = sqlite3.connect(DB_FILE)
+
+        df = pd.read_sql("SELECT * FROM TemperatureForecasts", conn)
+        conn.close()
+        
+        if df.empty:
+            sync_cwa_api()
+            conn = sqlite3.connect(DB_FILE)
+            df = pd.read_sql("SELECT * FROM TemperatureForecasts", conn)
+            conn.close()
+
+        # 轉換數值格式
+        for col in ["minTemp", "maxTemp", "pop"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        return df
+    except Exception as e:
+        sync_cwa_api()
+        try:
+            conn = sqlite3.connect(DB_FILE)
+            df = pd.read_sql("SELECT * FROM TemperatureForecasts", conn)
+            conn.close()
+            for col in ["minTemp", "maxTemp", "pop"]:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors="coerce")
+            return df
+        except Exception:
+            return pd.DataFrame()
 # 載入資料
 df_all = load_data()
 

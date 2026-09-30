@@ -2,5 +2,6 @@ streamlit
 pandas
 altair
 requests
+urllib3
 folium
 streamlit-folium
